@@ -1,0 +1,36 @@
+# .gitignore
+
+# Compiled binaries
+# الملفات الثنائية المترجمة
+/bin/
+*.exe
+*.dll
+
+# OS files
+# ملفات النظام
+.DS_Store
+Thumbs.db
+
+# IDE files
+# ملفات محررات النصوص
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go build cache
+# ذاكرة التخزين المؤقت لـ Go
+/tmp/
+
+# Test binaries and coverage
+# ملفات الاختبار والتغطية
+*.test
+*.out
+coverage.txt
+
+# Database files
+# ملفات قاعدة البيانات
+dump.rdb
+dump.rdb.aof
+*.aof
