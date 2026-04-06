@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+
+	"github.com/khalidbm1/build-my-own-redis/internal/protocol"
 )
 
 type Server struct {
@@ -52,26 +54,45 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// دائماً قفل الاتصال لما تخلص.
 	// لو ما تقفل، الاتصالات تتراكم وتخلص الموارد.
 	defer conn.Close()
-
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
+	reader := protocol.NewReader(conn)
+	writer := protocol.NewWriter(conn)
+	value, err := reader.Read()
 
 	if err != nil {
-		log.Printf("failed to read from connection: %w", conn.RemoteAddr(), err)
+		log.Printf("Error reading RESP: %v", err)
 		return
 	}
 
-	rawRequest := string(buf[:n])
-	log.Printf("Received request from %s:\n%s", conn.RemoteAddr(), rawRequest)
-	response := "+PONNG\r\n"
+	log.Printf("Parsed RESP from %s: Type=%v, Value=%v", conn.RemoteAddr(), value.Type, value)
 
-	_, err = conn.Write([]byte(response))
+	response := protocol.NewSimpleString("OK")
 
-	if err != nil {
-		log.Printf("Error Writing response to %s: %v", conn.RemoteAddr(), err)
+	if err := writer.Write(response); err != nil{
+		log.Printf("Error writing response to: %v", err)
 		return
 	}
-	log.Printf("Sent PONG to %s", conn.RemoteAddr())
+
+	log.Printf("Sent OK to %s", conn.RemoteAddr())
+
+	// buf := make([]byte, 1024)
+	// n, err := conn.Read(buf)
+
+	// if err != nil {
+	// 	log.Printf("failed to read from connection: %w", conn.RemoteAddr(), err)
+	// 	return
+	// }
+
+	// rawRequest := string(buf[:n])
+	// log.Printf("Received request from %s:\n%s", conn.RemoteAddr(), rawRequest)
+	// response := "+PONNG\r\n"
+
+	// _, err = conn.Write([]byte(response))
+
+	// if err != nil {
+	// 	log.Printf("Error Writing response to %s: %v", conn.RemoteAddr(), err)
+	// 	return
+	// }
+	// log.Printf("Sent PONG to %s", conn.RemoteAddr())
 }
 
 func (s *Server) Shutdown() error {
