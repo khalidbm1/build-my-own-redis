@@ -2,20 +2,25 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 
+	"github.com/khalidbm1/build-my-own-redis/internal/commands"
 	"github.com/khalidbm1/build-my-own-redis/internal/protocol"
+	"github.com/khalidbm1/build-my-own-redis/internal/storage"
 )
 
 type Server struct {
 	Addr     string
+	store    *storage.Store
 	listener net.Listener
 }
 
 func New(addr string) *Server {
 	return &Server{
-		Addr: addr,
+		Addr:  addr,
+		store: storage.New(),
 	}
 }
 
@@ -54,45 +59,30 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// دائماً قفل الاتصال لما تخلص.
 	// لو ما تقفل، الاتصالات تتراكم وتخلص الموارد.
 	defer conn.Close()
+
 	reader := protocol.NewReader(conn)
 	writer := protocol.NewWriter(conn)
-	value, err := reader.Read()
 
-	if err != nil {
-		log.Printf("Error reading RESP: %v", err)
-		return
+	for {
+		value, err := reader.Read()
+		if err != nil {
+			if err == io.EOF {
+				log.Printf("Client %s disconnected", conn.RemoteAddr())
+				return
+			}
+			log.Printf("Error reading RESP from %s: %v", conn.RemoteAddr(), err)
+			return
+		}
+
+		log.Printf("Parsed RESP from %s: Type=%v, Value=%v", conn.RemoteAddr(), value.Type, value)
+
+		response := commands.Dispatch(s.store, value)
+
+		if err := writer.Write(response); err != nil {
+			log.Printf("Error writing response to %s: %v", conn.RemoteAddr(), err)
+			return
+		}
 	}
-
-	log.Printf("Parsed RESP from %s: Type=%v, Value=%v", conn.RemoteAddr(), value.Type, value)
-
-	response := protocol.NewSimpleString("OK")
-
-	if err := writer.Write(response); err != nil{
-		log.Printf("Error writing response to: %v", err)
-		return
-	}
-
-	log.Printf("Sent OK to %s", conn.RemoteAddr())
-
-	// buf := make([]byte, 1024)
-	// n, err := conn.Read(buf)
-
-	// if err != nil {
-	// 	log.Printf("failed to read from connection: %w", conn.RemoteAddr(), err)
-	// 	return
-	// }
-
-	// rawRequest := string(buf[:n])
-	// log.Printf("Received request from %s:\n%s", conn.RemoteAddr(), rawRequest)
-	// response := "+PONNG\r\n"
-
-	// _, err = conn.Write([]byte(response))
-
-	// if err != nil {
-	// 	log.Printf("Error Writing response to %s: %v", conn.RemoteAddr(), err)
-	// 	return
-	// }
-	// log.Printf("Sent PONG to %s", conn.RemoteAddr())
 }
 
 func (s *Server) Shutdown() error {
