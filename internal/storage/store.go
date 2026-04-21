@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -13,6 +14,8 @@ const (
 	TypeSet
 )
 
+var ErrWrongType = errors.New("wrong type")
+
 type Entry struct {
 	Type     DataType
 	Value    interface{}
@@ -20,18 +23,26 @@ type Entry struct {
 }
 
 type Store struct {
-	data map[string]*Entry
-	mu   sync.RWMutex
+	data     map[string]*Entry
+	mu       sync.RWMutex
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // New creates a new empty store.
 // New يسوي مخزن فارغ جديد.
 func New() *Store {
 	s := &Store{
-		data: make(map[string]*Entry),
+		data:   make(map[string]*Entry),
+		stopCh: make(chan struct{}),
 	}
 	go s.cleanExpiredKeys()
 	return s
+}
+
+// Close stops the background expiry sweeper. Safe to call once.
+func (s *Store) Close() {
+	s.stopOnce.Do(func() { close(s.stopCh) })
 }
 
 // Set Stores a key-vlaue pair in the store.
@@ -39,7 +50,10 @@ func New() *Store {
 func (s *Store) Set(key, value string, ttl *time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entry := &Entry{Value: value}
+	entry := &Entry{
+		Type: TypeString,
+		Value: value,
+	}
 
 	if ttl != nil {
 		expireAt := time.Now().Add(*ttl)
@@ -48,26 +62,28 @@ func (s *Store) Set(key, value string, ttl *time.Duration) {
 	s.data[key] = entry
 }
 
-// Get Retrieves the value associated with the given key from the store.
+// Get retrieves the string value associated with key.
+// Returns (value, true, nil) on hit, ("", false, nil) on miss/expired,
+// ("", false, ErrWrongType) if key holds a non-string value.
 // Get يبحث عن قيمة مفتاح معينة في المخزن.
-func (s *Store) Get(key string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	//value, exists := s.data[key]
-	entry, exists := s.data[key]
+func (s *Store) Get(key string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
+	entry, exists := s.data[key]
 	if !exists {
-		return "", false
+		return "", false, nil
 	}
 
 	if s.isExpired(entry) {
-		return "", false
+		delete(s.data, key)
+		return "", false, nil
+	}
 
-	}
 	if entry.Type != TypeString {
-		return "", false
+		return "", false, ErrWrongType
 	}
-	return entry.Value.(string), true
+	return entry.Value.(string), true, nil
 }
 
 func (s *Store) LPush(key string, values ...string) int {
@@ -425,15 +441,19 @@ func (s *Store) cleanExpiredKeys() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		s.mu.Lock()
-		now := time.Now()
-
-		for key, entry := range s.data {
-			if entry.ExpireAt != nil && now.After(*entry.ExpireAt) {
-				delete(s.data, key)
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			now := time.Now()
+			for key, entry := range s.data {
+				if entry.ExpireAt != nil && now.After(*entry.ExpireAt) {
+					delete(s.data, key)
+				}
 			}
+			s.mu.Unlock()
 		}
-		s.mu.Unlock()
 	}
 }
