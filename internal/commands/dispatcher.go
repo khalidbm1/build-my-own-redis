@@ -267,6 +267,7 @@ func handleIncr(store *storage.Store, args []protocol.Value) protocol.Value {
 	} else {
 		var err error
 		num, err = strconv.Atoi(value)
+		
 		if err != nil {
 			return protocol.NewError("ERR value is not an integer or out of range")
 		}
