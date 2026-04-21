@@ -29,13 +29,26 @@ func (w *Writer) Write(value Value) error {
 		return w.writeInteger([]byte(strconv.Itoa(value.Number)))
 
 	case BulkString:
+		if value.IsNull {
+			return w.writeRaw("$-1\r\n")
+		}
 		return w.writeBulkString([]byte(value.String))
 
 	case Array:
+		if value.IsNull {
+			return w.writeRaw("*-1\r\n")
+		}
 		return w.writeArray(value.Array)
 	default:
 		return fmt.Errorf("unknown type: %c", value.Type)
 	}
+}
+
+func (w *Writer) writeRaw(s string) error {
+	if _, err := w.writer.WriteString(s); err != nil {
+		return err
+	}
+	return w.writer.Flush()
 }
 
 // writeSimpleString writes a simple string to the writer.

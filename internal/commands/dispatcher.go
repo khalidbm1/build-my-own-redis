@@ -6,8 +6,10 @@
 package commands
 
 import (
+	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/khalidbm1/build-my-own-redis/internal/protocol"
 	"github.com/khalidbm1/build-my-own-redis/internal/storage"
@@ -25,16 +27,30 @@ type Handler func(store *storage.Store, args []protocol.Value) protocol.Value
 // handlers maps command names to handler functions.
 // هالخريطة تربط أسماء الأوامر مع دوال المعالجات.
 var handlers = map[string]Handler{
-	"SET":    handleSet,
-	"GET":    handleGet,
-	"DEL":    handleDel,
-	"INCR":   handleIncr,
-	"DECR":   handleDecr,
-	"EXISTS": handleExists,
-	"KEYS":   handleKeys,
-	"PING":   handlePing,
-	"ECHO":   handleEcho,
-	//"EXPIRE":    handleExpire,
+	"SET":       handleSet,
+	"GET":       handleGet,
+	"DEL":       handleDel,
+	"INCR":      handleIncr,
+	"DECR":      handleDecr,
+	"EXISTS":    handleExists,
+	"KEYS":      handleKeys,
+	"PING":      handlePing,
+	"ECHO":      handleEcho,
+	"LPUSH":     handleLPush,
+	"RPUSH":     handleRPush,
+	"LPOP":      handleLPop,
+	"RPOP":      handleRPop,
+	"LLEN":      handleLLen,
+	"LRANGE":    handleLRange,
+	"SADD":      handleSAdd,
+	"SREM":      handleSRem,
+	"SMEMBERS":  handleSMembers,
+	"SISMEMBER": handleSIsMember,
+	"SCARD":     handleSCard,
+	"EXPIRE":    handleExpire,
+	"PEXPIRE":   handlePExpire,
+	"TTL":       handleTTL,
+	"PERSIST":   handlePersist,
 	//"SCAN":      handleScan,
 	// "SCANCOUNT": handleScanCount,
 	// "TYPE":      handleType,
@@ -146,10 +162,34 @@ func handleSet(store *storage.Store, args []protocol.Value) protocol.Value {
 	key := args[0].String
 	value := args[1].String
 
-	// TODO: In Stage 5, we'll add support for options like EX, PX, NX, XX
-	// الحين، نخزن بدون خيارات. في المرحلة 5 بنضيف EX, PX, NX, XX
+	var ttl *time.Duration
+	for i := 2; i < len(args); i++ {
+		if args[i].Type != protocol.BulkString {
+			return protocol.NewError("ERR syntax error")
+		}
+		opt := strings.ToUpper(args[i].String)
+		switch opt {
+		case "EX", "PX":
+			if i+1 >= len(args) || args[i+1].Type != protocol.BulkString {
+				return protocol.NewError("ERR syntax error")
+			}
+			n, err := strconv.ParseInt(args[i+1].String, 10, 64)
+			if err != nil || n <= 0 {
+				return protocol.NewError("ERR value is not an integer or out of range")
+			}
+			unit := time.Second
+			if opt == "PX" {
+				unit = time.Millisecond
+			}
+			d := time.Duration(n) * unit
+			ttl = &d
+			i++
+		default:
+			return protocol.NewError("ERR syntax error")
+		}
+	}
 
-	store.Set(key, value, nil)
+	store.Set(key, value, ttl)
 	return protocol.NewSimpleString("OK")
 }
 
@@ -167,7 +207,14 @@ func handleGet(store *storage.Store, args []protocol.Value) protocol.Value {
 	}
 
 	key := args[0].String
-	value, exists := store.Get(key)
+	value, exists, err := store.Get(key)
+
+	if err != nil {
+		if errors.Is(err, storage.ErrWrongType) {
+			return protocol.NewError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+		return protocol.NewError("ERR " + err.Error())
+	}
 
 	if !exists {
 		return protocol.NewNull()
@@ -259,18 +306,23 @@ func handleIncr(store *storage.Store, args []protocol.Value) protocol.Value {
 	}
 
 	key := args[0].String
-	value, exists := store.Get(key)
+	value, exists, err := store.Get(key)
+	if err != nil {
+		if errors.Is(err, storage.ErrWrongType) {
+			return protocol.NewError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+		return protocol.NewError("ERR " + err.Error())
+	}
 
 	var num int
 	if !exists {
 		num = 0
 	} else {
-		var err error
-		num, err = strconv.Atoi(value)
-		
-		if err != nil {
+		n, convErr := strconv.Atoi(value)
+		if convErr != nil {
 			return protocol.NewError("ERR value is not an integer or out of range")
 		}
+		num = n
 	}
 
 	num++
@@ -288,20 +340,292 @@ func handleDecr(store *storage.Store, args []protocol.Value) protocol.Value {
 	}
 
 	key := args[0].String
-	value, exists := store.Get(key)
+	value, exists, err := store.Get(key)
+	if err != nil {
+		if errors.Is(err, storage.ErrWrongType) {
+			return protocol.NewError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+		return protocol.NewError("ERR " + err.Error())
+	}
 
 	var num int
 	if !exists {
 		num = 0
 	} else {
-		var err error
-		num, err = strconv.Atoi(value)
-		if err != nil {
+		n, convErr := strconv.Atoi(value)
+		if convErr != nil {
 			return protocol.NewError("ERR value is not an integer or out of range")
 		}
+		num = n
 	}
 
 	num--
 	store.Set(key, strconv.Itoa(num), nil)
 	return protocol.NewInteger(num)
+}
+
+func handleLPush(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
+		return protocol.NewError("ERR wrong number of arguments for 'lpush' command")
+	}
+
+	if args[0].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid key type")
+	}
+
+	key := args[0].String
+	values := make([]string, len(args)-1)
+
+	for i, arg := range args[1:] {
+		if arg.Type != protocol.BulkString {
+			return protocol.NewError("ERR invalid value type")
+		}
+		values[i] = arg.String
+	}
+
+	length := store.LPush(key, values...)
+
+	if length == -1 {
+		return protocol.NewError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	return protocol.NewInteger(length)
+}
+
+func handleRPush(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
+		return protocol.NewError("ERR wrong number of arguments for 'rpush' command")
+	}
+
+	if args[0].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid key type")
+	}
+
+	key := args[0].String
+	values := make([]string, len(args)-1)
+	for i, arg := range args[1:] {
+		if arg.Type != protocol.BulkString {
+			return protocol.NewError("ERR invalid value type")
+		}
+		values[i] = arg.String
+	}
+
+	length := store.RPush(key, values...)
+	if length == -1 {
+		return protocol.NewError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	return protocol.NewInteger(length)
+}
+
+func handleLPop(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 1 {
+		return protocol.NewError("ERR wrong number of arguments for 'lpop' command")
+	}
+
+	if args[0].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid key type")
+	}
+
+	key := args[0].String
+	value, exists := store.LPop(key)
+
+	if !exists {
+		return protocol.NewNull()
+	}
+
+	return protocol.NewBulkString(value)
+}
+
+func handleRPop(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 1 {
+		return protocol.NewError("ERR wrong number of arguments for 'rpop' command")
+	}
+
+	if args[0].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid key type")
+	}
+
+	key := args[0].String
+	value, exists := store.RPop(key)
+
+	if !exists {
+		return protocol.NewNull()
+	}
+
+	return protocol.NewBulkString(value)
+}
+
+func handleLLen(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 1 {
+		return protocol.NewError("ERR wrong number of arguments for 'llen' command")
+	}
+
+	key := args[0].String
+	length := store.LLen(key)
+	return protocol.NewInteger(length)
+}
+
+func handleLRange(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 3 {
+		return protocol.NewError("ERR wrong number of arguments for 'lrange' command")
+	}
+
+	key := args[0].String
+	start, err1 := strconv.Atoi(args[1].String)
+	stop, err2 := strconv.Atoi(args[2].String)
+
+	if err1 != nil || err2 != nil {
+		return protocol.NewError("ERR invalid index type")
+	}
+
+	values := store.LRange(key, start, stop)
+	response := make([]protocol.Value, len(values))
+
+	for i, v := range values {
+		response[i] = protocol.NewBulkString(v)
+	}
+
+	return protocol.NewArray(response)
+}
+
+func handleSAdd(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
+		return protocol.NewError("ERR wrong number of arguments for 'sadd' command")
+	}
+
+	if args[0].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid key type")
+	}
+
+	key := args[0].String
+	members := make([]string, len(args)-1)
+
+	for i, arg := range args[1:] {
+		if arg.Type != protocol.BulkString {
+			return protocol.NewError("ERR invalid member type")
+		}
+		members[i] = arg.String
+	}
+
+	added := store.SAdd(key, members...)
+
+	if added == -1 {
+		return protocol.NewError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	return protocol.NewInteger(added)
+}
+
+func handleSRem(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
+		return protocol.NewError("ERR wrong number of arguments for 'srem' command")
+	}
+
+	if args[0].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid key type")
+	}
+
+	key := args[0].String
+	members := make([]string, len(args)-1)
+
+	for i, arg := range args[1:] {
+		if arg.Type != protocol.BulkString {
+			return protocol.NewError("ERR invalid member type")
+		}
+		members[i] = arg.String
+	}
+	removed := store.SRem(key, members...)
+	return protocol.NewInteger(removed)
+}
+
+func handleSMembers(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 1 {
+		return protocol.NewError("ERR wrong number of arguments for 'smembers' command")
+	}
+
+	key := args[0].String
+	members := store.SMembers(key)
+
+	response := make([]protocol.Value, len(members))
+	for i, member := range members {
+		response[i] = protocol.NewBulkString(member)
+	}
+
+	return protocol.NewArray(response)
+}
+
+func handleSIsMember(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 2 {
+		return protocol.NewError("ERR wrong number of arguments for 'sismember' command")
+	}
+
+	key := args[0].String
+	member := args[1].String
+
+	if store.SIsMember(key, member) {
+		return protocol.NewInteger(1)
+	}
+
+	return protocol.NewInteger(0)
+}
+
+func handleSCard(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 1 {
+		return protocol.NewError("ERR wrong number of arguments for 'scard' command")
+	}
+
+	key := args[0].String
+	return protocol.NewInteger(store.SCard(key))
+}
+
+func handleExpire(store *storage.Store, args []protocol.Value) protocol.Value {
+	return setExpire(store, args, time.Second, "expire")
+}
+
+func handlePExpire(store *storage.Store, args []protocol.Value) protocol.Value {
+	return setExpire(store, args, time.Millisecond, "pexpire")
+}
+
+func setExpire(store *storage.Store, args []protocol.Value, unit time.Duration, name string) protocol.Value {
+	if len(args) != 2 {
+		return protocol.NewError("ERR wrong number of arguments for '" + name + "' command")
+	}
+	if args[0].Type != protocol.BulkString || args[1].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid argument type")
+	}
+
+	n, err := strconv.ParseInt(args[1].String, 10, 64)
+	if err != nil {
+		return protocol.NewError("ERR value is not an integer or out of range")
+	}
+
+	ttl := time.Duration(n) * unit
+	if store.Expire(args[0].String, &ttl) {
+		return protocol.NewInteger(1)
+	}
+	return protocol.NewInteger(0)
+}
+
+func handleTTL(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 1 {
+		return protocol.NewError("ERR wrong number of arguments for 'ttl' command")
+	}
+	if args[0].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid key type")
+	}
+	return protocol.NewInteger(store.TTL(args[0].String))
+}
+
+func handlePersist(store *storage.Store, args []protocol.Value) protocol.Value {
+	if len(args) != 1 {
+		return protocol.NewError("ERR wrong number of arguments for 'persist' command")
+	}
+	if args[0].Type != protocol.BulkString {
+		return protocol.NewError("ERR invalid key type")
+	}
+	if store.Expire(args[0].String, nil) {
+		return protocol.NewInteger(1)
+	}
+	return protocol.NewInteger(0)
 }
