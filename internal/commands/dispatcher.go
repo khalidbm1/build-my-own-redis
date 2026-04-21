@@ -149,7 +149,7 @@ func handleSet(store *storage.Store, args []protocol.Value) protocol.Value {
 	// TODO: In Stage 5, we'll add support for options like EX, PX, NX, XX
 	// الحين، نخزن بدون خيارات. في المرحلة 5 بنضيف EX, PX, NX, XX
 
-	store.Set(key, value)
+	store.Set(key, value, nil)
 	return protocol.NewSimpleString("OK")
 }
 
@@ -267,13 +267,14 @@ func handleIncr(store *storage.Store, args []protocol.Value) protocol.Value {
 	} else {
 		var err error
 		num, err = strconv.Atoi(value)
+		
 		if err != nil {
 			return protocol.NewError("ERR value is not an integer or out of range")
 		}
 	}
 
 	num++
-	store.Set(key, strconv.Itoa(num))
+	store.Set(key, strconv.Itoa(num), nil)
 	return protocol.NewInteger(num)
 }
 
@@ -301,6 +302,6 @@ func handleDecr(store *storage.Store, args []protocol.Value) protocol.Value {
 	}
 
 	num--
-	store.Set(key, strconv.Itoa(num))
+	store.Set(key, strconv.Itoa(num), nil)
 	return protocol.NewInteger(num)
 }

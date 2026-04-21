@@ -43,10 +43,10 @@ func (s *Server) Start() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("failed to accept connection: %w", err)
+			log.Printf("failed to accept connection: %v", err)
 			continue
 		}
-		log.Printf("New connection fro %s", conn.RemoteAddr())
+		log.Printf("New connection from %s", conn.RemoteAddr())
 
 		s.handleConnection(conn)
 	}
