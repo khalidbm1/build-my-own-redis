@@ -98,25 +98,24 @@ func (r *Reader) readBulkString() (Value, error) {
 		return Value{}, err
 	}
 
-	lenght, err := strconv.Atoi(string(line))
+	length, err := strconv.Atoi(string(line))
 
 	if err != nil {
-		return Value{}, 
-		fmt.Errorf("Invalid bulk string length: %v", err)
+		return Value{}, fmt.Errorf("Invalid bulk string length: %v", err)
 	}
 
-	if lenght == -1 {
+	if length == -1 {
 		return NewNull(), nil
 	}
 
-	buf := make([]byte, lenght+2)
+	buf := make([]byte, length+2)
 	_, err = io.ReadFull(r.reader, buf)
 
 	if err != nil {
 		return Value{}, err
 	}
 
-	return NewBulkString(string(buf[:lenght])), nil
+	return NewBulkString(string(buf[:length])), nil
 }
 
 func (r *Reader) readArray() (Value, error) {
@@ -133,7 +132,7 @@ func (r *Reader) readArray() (Value, error) {
 	}
 
 	if count == -1 {
-		return NewNull(), nil
+		return NewNullArray(), nil
 	}
 
 	array := make([]Value, count)

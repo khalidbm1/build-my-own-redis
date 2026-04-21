@@ -41,3 +41,7 @@ func NewArray(values []Value) Value {
 func NewNull() Value {
 	return Value{Type: BulkString, IsNull: true}
 }
+
+func NewNullArray() Value {
+	return Value{Type: Array, IsNull: true}
+}
